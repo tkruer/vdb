@@ -2,20 +2,18 @@ pub mod database;
 pub mod embeddings;
 
 use crate::database::DatabaseOperations;
+use anyhow::Result;
+use embeddings::SentenceTransformer;
 use polars::prelude::*;
 use std::fs::File;
+use std::path::Path;
 use std::time::Instant;
 
-pub fn new(method: &str) -> Result {
+pub fn new(method: &str) -> Result<SentenceTransformer> {
     let path = "./data/data_cleaned.tsv";
     let file = File::open(path).expect("could not open file");
 
-    let data = CsvReader::new(file)
-        .infer_schema(None)
-        .with_delimiter(b"\t"[0])
-        .has_header(false)
-        .finish()
-        .unwrap();
+    let data = CsvReader::new(file).finish().unwrap();
 
     let row_count = data.shape().0;
 
@@ -25,7 +23,7 @@ pub fn new(method: &str) -> Result {
     let mut db = database::new(method);
 
     let start_time = Instant::now();
-    db.load(texts);
+    db.load(&texts);
 
     let queries = get_texts(&data, "column_1".to_string());
 
@@ -45,12 +43,14 @@ pub fn new(method: &str) -> Result {
         "RESULTS: |{}| had correct |{}|, out of |{}|, in |{:?}|",
         method, correct, row_count, elapsed
     );
-    Result::Ok(())
+    let path = Path::new(method);
+    let svc = SentenceTransformer::new(path, tch::Device::Cpu)?;
+    Ok(svc)
 }
 
 fn get_texts(data: &DataFrame, column: String) -> Vec<String> {
     let row_count = data.shape().0;
-    let text_col = data.select(column.as_str()).unwrap();
+    let text_col = data.select(&[column.to_string()]).unwrap();
     let mut texts = Vec::new();
     for i in 0..row_count {
         let text_cell = &text_col.get(i).unwrap();

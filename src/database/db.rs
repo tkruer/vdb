@@ -5,6 +5,7 @@ use uuid::Uuid;
 pub struct Document {
     pub id: String,
     pub embedding: Vec<f64>,
+    pub text: String,
     pub score: f64,
     pub metadata: Vec<String>,
 }
@@ -36,19 +37,19 @@ pub trait DatabaseOperations {
 }
 
 impl DatabaseOperations for Database {
-    fn insert(&self, document: Document) -> Result<(), String> {
+    fn insert(&self, _document: Document) -> Result<(), String> {
         // Implementation here
         Ok(())
     }
-    fn update(&self, document: Document) -> Result<(), String> {
+    fn update(&self, _document: Document) -> Result<(), String> {
         // Implementation here
         Ok(())
     }
-    fn delete(&self, id: &str) -> Result<(), String> {
+    fn delete(&self, _id: &str) -> Result<(), String> {
         // Implementation here
         Ok(())
     }
-    fn search(&self, query: &str) -> Result<Vec<Document>, String> {
+    fn search(&self, _query: &str) -> Result<Vec<Document>, String> {
         // Implementation here
         Ok(vec![])
     }
@@ -56,6 +57,7 @@ impl DatabaseOperations for Database {
         // Implementation here
         Ok(Document {
             id: id.to_string(),
+            text: id.to_string(),
             embedding: vec![],
             score: 0.0,
             metadata: vec![],
@@ -85,14 +87,12 @@ impl DatabaseOperations for Database {
     fn load(&mut self, texts: &Vec<String>) {
         match self {
             Database::CosineDatabase(db) => db.load(texts),
-            _ => (),
         }
     }
 
     fn query(&self, query: String, n: u32) -> Vec<Document> {
         match self {
             Database::CosineDatabase(db) => db.query(query, n),
-            _ => vec![],
         }
     }
 }

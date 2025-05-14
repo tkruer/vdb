@@ -11,6 +11,7 @@ impl DatabaseOperations for CosineDatabase {
             let embedding = generate_emdedding(text);
             let document = Document {
                 id: text.clone(),
+                text: text.clone(),
                 embedding,
                 score: 0.0,
                 metadata: vec![],
@@ -32,21 +33,21 @@ impl DatabaseOperations for CosineDatabase {
         result.drain(..n as usize).collect()
     }
 
-    fn insert(&self, document: Document) -> Result<(), String> {
+    fn insert(&self, _document: Document) -> Result<(), String> {
         // Implementation here
         Ok(())
     }
 
-    fn update(&self, document: Document) -> Result<(), String> {
+    fn update(&self, _document: Document) -> Result<(), String> {
         // Implementation here
         Ok(())
     }
-    fn delete(&self, id: &str) -> Result<(), String> {
+    fn delete(&self, _id: &str) -> Result<(), String> {
         // Implementation here
         Ok(())
     }
 
-    fn search(&self, query: &str) -> Result<Vec<Document>, String> {
+    fn search(&self, _query: &str) -> Result<Vec<Document>, String> {
         // Implementation here
         Ok(vec![])
     }
@@ -54,6 +55,7 @@ impl DatabaseOperations for CosineDatabase {
         // Implementation here
         Ok(Document {
             id: id.to_string(),
+            text: id.to_string(),
             embedding: vec![],
             score: 0.0,
             metadata: vec![],
@@ -87,7 +89,7 @@ impl DatabaseOperations for CosineDatabase {
 }
 
 fn cosine_similarity(a: &Vec<f64>, b: &Vec<f64>) -> f64 {
-    let norms = (norm(a) * norm(b));
+    let norms = norm(a) * norm(b);
     if norms == 0.0 {
         return 0.0;
     }
