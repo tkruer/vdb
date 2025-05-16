@@ -1,5 +1,6 @@
 pub use vdb;
 
-fn main() {
-    vdb::new("cosine").unwrap();
+#[tokio::main]
+async fn main() {
+    vdb::database::db::new().await.unwrap();
 }

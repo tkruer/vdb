@@ -1,5 +1,12 @@
-use crate::database::cosine::CosineDatabase;
-use uuid::Uuid;
+use serde_json::to_string;
+use std::{collections::HashMap, sync::Arc};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{TcpListener, TcpStream},
+    sync::Mutex,
+};
+use tracing::{error, info};
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[derive(Debug, Clone)]
 pub struct Document {
@@ -10,89 +17,93 @@ pub struct Document {
     pub metadata: Vec<String>,
 }
 
-pub enum Database {
-    CosineDatabase(CosineDatabase),
+pub type Database = Arc<Mutex<HashMap<String, String>>>;
+
+pub async fn new() -> std::io::Result<()> {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let subscriber = FmtSubscriber::builder().with_env_filter(filter).finish();
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
+
+    info!("starting vdb on 127.0.0.1:6379");
+
+    let db = Arc::new(Mutex::new(HashMap::new()));
+    let listener = TcpListener::bind("127.0.0.1:6379").await?;
+    loop {
+        let (socket, addr) = listener.accept().await?;
+        info!(%addr, "accepted connection");
+        let db = db.clone();
+        tokio::spawn(async move {
+            if let Err(err) = handle_connection(socket, db).await {
+                error!(error = %err, "connection error");
+            }
+        });
+    }
 }
 
-pub fn new(database_method: &str) -> Database {
-    match database_method {
-        "cosine" => Database::CosineDatabase(CosineDatabase { documents: vec![] }),
-        _ => panic!("Unsupported database method"),
-    }
-}
+async fn handle_connection(stream: TcpStream, db: Database) -> std::io::Result<()> {
+    let (reader, mut writer) = stream.into_split();
+    let mut lines = BufReader::new(reader).lines();
 
-pub trait DatabaseOperations {
-    fn insert(&self, document: Document) -> Result<(), String>;
-    fn update(&self, document: Document) -> Result<(), String>;
-    fn delete(&self, id: &str) -> Result<(), String>;
-    fn search(&self, query: &str) -> Result<Vec<Document>, String>;
-    fn get(&self, id: &str) -> Result<Document, String>;
-    fn list(&self) -> Result<Vec<Document>, String>;
-    fn count(&self) -> Result<usize, String>;
-    fn clear(&self) -> Result<(), String>;
-    fn close(&self) -> Result<(), String>;
-    fn get_metadata(&self, id: &str) -> Result<Vec<String>, String>;
-    fn load(&mut self, texts: &Vec<String>);
-    fn query(&self, query: String, n: u32) -> Vec<Document>;
-}
+    writer.write_all(b"+OK vdb 0.1\r\n").await?;
 
-impl DatabaseOperations for Database {
-    fn insert(&self, _document: Document) -> Result<(), String> {
-        // Implementation here
-        Ok(())
-    }
-    fn update(&self, _document: Document) -> Result<(), String> {
-        // Implementation here
-        Ok(())
-    }
-    fn delete(&self, _id: &str) -> Result<(), String> {
-        // Implementation here
-        Ok(())
-    }
-    fn search(&self, _query: &str) -> Result<Vec<Document>, String> {
-        // Implementation here
-        Ok(vec![])
-    }
-    fn get(&self, id: &str) -> Result<Document, String> {
-        // Implementation here
-        Ok(Document {
-            id: id.to_string(),
-            text: id.to_string(),
-            embedding: vec![],
-            score: 0.0,
-            metadata: vec![],
-        })
-    }
-    fn list(&self) -> Result<Vec<Document>, String> {
-        // Implementation here
-        Ok(vec![])
-    }
-    fn count(&self) -> Result<usize, String> {
-        // Implementation here
-        Ok(0)
-    }
-    fn clear(&self) -> Result<(), String> {
-        // Implementation here
-        Ok(())
-    }
-    fn close(&self) -> Result<(), String> {
-        // Implementation here
-        Ok(())
-    }
-    fn get_metadata(&self, _id: &str) -> Result<Vec<String>, String> {
-        // Implementation here
-        Ok(vec![])
-    }
+    while let Some(line) = lines.next_line().await? {
+        info!("received command: {}", line);
+        let mut parts = line.splitn(3, ' ');
+        match parts.next() {
+            Some(cmd) if cmd.eq_ignore_ascii_case("GET") => {
+                if let Some(key) = parts.next() {
+                    let map = db.lock().await;
+                    if let Some(val) = map.get(key) {
+                        writer.write_all(format!("+{}\r\n", val).as_bytes()).await?;
+                    } else {
+                        writer.write_all(b"$-1\r\n").await?;
+                    }
+                } else {
+                    writer.write_all(b"-ERR missing key\r\n").await?;
+                }
+            }
 
-    fn load(&mut self, texts: &Vec<String>) {
-        match self {
-            Database::CosineDatabase(db) => db.load(texts),
+            Some(cmd) if cmd.eq_ignore_ascii_case("SET") => {
+                if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+                    let mut map = db.lock().await;
+                    map.insert(key.to_string(), value.to_string());
+                    writer.write_all(b"+OK\r\n").await?;
+                } else {
+                    writer.write_all(b"-ERR missing key or value\r\n").await?;
+                }
+            }
+
+            Some(cmd) if cmd.eq_ignore_ascii_case("SEARCH") => {
+                if let Some(query) = parts.next() {
+                    let map = db.lock().await;
+                    let results: Vec<String> = map
+                        .iter()
+                        .filter(|(k, v)| k.contains(query) || v.contains(query))
+                        .map(|(k, v)| format!("{}: {}", k, v))
+                        .collect();
+
+                    if results.is_empty() {
+                        writer.write_all(b"$-1\r\n").await?;
+                    } else {
+                        let json = to_string(&results).unwrap();
+                        writer
+                            .write_all(format!("+{}\r\n", json).as_bytes())
+                            .await?;
+                    }
+                } else {
+                    writer.write_all(b"-ERR missing query\r\n").await?;
+                }
+            }
+            Some(cmd) if cmd.eq_ignore_ascii_case("QUIT") => {
+                writer.write_all(b"+BYE\r\n").await?;
+                break;
+            }
+
+            _ => {
+                writer.write_all(b"-ERR unknown command\r\n").await?;
+            }
         }
     }
 
-    fn query(&self, query: String, n: u32) -> Vec<Document> {
-        match self {
-            Database::CosineDatabase(db) => db.query(query, n),
-        }
-    }
+    Ok(())
 }
